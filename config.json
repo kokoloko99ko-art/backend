@@ -1,0 +1,8 @@
+{
+  "_instructions": "1) @BotFather-də bot yaradın, TOKEN-i bura yazın. 2) @userinfobot-dan öz chat ID-nizi öyrənin və CHAT_ID bura yazın. 3) 'Send message' testi üçün: node test-telegram.js",
+  "TELEGRAM_BOT_TOKEN": "9044285476:AAGxWXbhz1i8vo4cO3QoGi8ZiU28TsbnXXA",
+  "TELEGRAM_BOT_USERNAME": "",
+  "TELEGRAM_CHAT_ID": "9252807130",
+  "PAYMENT_CARD_NUMBER": "1234 5678 1234 1234",
+  "TELEGRAM_ADMIN_USER_ID": "9252807130"
+}

@@ -1,0 +1,9 @@
+{
+  "_instructions": "Copy this file to config.json and fill in your values. Never commit config.json or share your bot token.",
+  "TELEGRAM_BOT_TOKEN": "",
+  "TELEGRAM_BOT_USERNAME": "",
+  "TELEGRAM_CHAT_ID": "",
+  "TELEGRAM_ADMIN_USER_ID": "",
+  "PAYMENT_CARD_NUMBER": "",
+  "PAYMENT_BANK_NAME": ""
+}
