@@ -3,7 +3,7 @@ const path = require('path');
 
 let config = {};
 try {
-  config = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8'));
+  config = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf8').replace(/^\uFEFF/, ''));
 } catch (error) {
   if (error.code !== 'ENOENT') throw error;
 }
