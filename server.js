@@ -430,14 +430,16 @@ app.post('/api/forgot-password', createRateLimiter(15 * 60 * 1000, 5, 'reset'), 
   // Cavabda istifadəçinin olub-olmadığını açıqlamırıq (security).
   if (user && isMailConfigured()) {
     var code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
-    passwordResetCodes.set(normalized, { code, expiresAt: Date.now() + RESET_CODE_TTL });
     sendResetCodeEmail(normalized, code).then(function (sent) {
-      if (!sent) console.warn('[reset] Kod e-poçtu göndərilmədi:', normalized);
+      if (sent) passwordResetCodes.set(normalized, { code, expiresAt: Date.now() + RESET_CODE_TTL });
+      else console.warn('[reset] Kod e-poçtu göndərilmədi; mailer xətasını yoxlayın.');
+    }).catch(function (error) {
+      console.error('[reset] Kod e-poçtunun göndərilməsində xəta:', error.message);
     });
   } else if (user && !isMailConfigured()) {
-    console.warn('[reset] Mail konfiqurasiya edilməyib — kod göndərilmədi:', normalized);
+    console.warn('[reset] Mail konfiqurasiya edilməyib — kod göndərilmədi.');
   }
-  res.json({ ok: true, message: 'Əgər bu e-poçt qeydiyyatdan keçibsə, bərpa kodu göndərildi.' });
+  res.json({ ok: true, message: 'Əgər bu e-poçt qeydiyyatdan keçibsə, bərpa kodu göndəriləcək.' });
 });
 
 app.post('/api/verify-reset-code', createRateLimiter(15 * 60 * 1000, 10, 'reset-verify'), (req, res) => {

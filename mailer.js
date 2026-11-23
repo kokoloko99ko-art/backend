@@ -34,7 +34,10 @@ function sendMail(to, subject, html) {
   if (!t) return Promise.resolve(false);
   const from = process.env.GMAIL_USER || config.GMAIL_USER;
   return t.sendMail({ from: '"Lightroom" <' + from + '>', to, subject, html })
-    .then(() => true)
+    .then(() => {
+      console.info('[mailer] SMTP e-poçtu qəbul etdi.');
+      return true;
+    })
     .catch((e) => {
       console.error('[mailer] Göndərilmədi:', e.message);
       return false;
