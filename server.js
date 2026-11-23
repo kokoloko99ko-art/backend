@@ -391,8 +391,8 @@ app.post('/api/register', (req, res) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return res.status(400).json({ error: 'E-poçt formatı yanlışdır.' });
   phone = normalizePhone(phone);
   if (!/^\+994\s\d{2}\s\d{3}\s\d{2}\s\d{2}$/.test(phone)) return res.status(400).json({ error: 'Mobil nömrə formatı +994 xx xxx xx xx olmalıdır.' });
-  var finCode = typeof (req.body || {}).finCode === 'string' ? req.body.finCode.trim().toUpperCase() : '';
-  if (finCode && !/^[A-Z0-9]{7}$/.test(finCode)) finCode = '';
+  var finCode = typeof (req.body || {}).finCode === 'string' ? req.body.finCode.trim().toUpperCase() : null;
+  if (!finCode || !/^[A-Z0-9]{7}$/.test(finCode)) finCode = null;
   try {
     var info = db.prepare('INSERT INTO users (fullname, email, phone, password_hash, fin_code) VALUES (?,?,?,?,?)')
       .run(fullname.trim(), email.trim().toLowerCase(), phone, hashPassword(password), finCode);
