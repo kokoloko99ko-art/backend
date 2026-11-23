@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 // NEXORA Backend — Express + SQLite + Telegram reports
 // ============================================================
 const express = require('express');
@@ -9,6 +9,7 @@ const path = require('path');
 const { sendTelegramMessage, sendTelegramPhoto, pollForCodes } = require('./telegram');
 const { bakuDate, getEarningStartAt, getNextEarningDate } = require('./earnings');
 const { getStaticPathStatus } = require('./static-path');
+const { sendResetCodeEmail, isMailConfigured } = require('./mailer');
 const config = require('./config');
 
 const app = express();
@@ -98,6 +99,7 @@ function createRateLimiter(windowMs, maxRequests, bucketName) {
 app.use('/api', createRateLimiter(15 * 60 * 1000, 300, 'api'));
 app.use('/api/login', createRateLimiter(15 * 60 * 1000, 10, 'auth'));
 app.use('/api/register', createRateLimiter(15 * 60 * 1000, 10, 'auth'));
+app.use('/api/forgot-password', createRateLimiter(15 * 60 * 1000, 5, 'reset'));
 app.use('/api', express.json({ limit: '8mb' }));
 
 // Serve the static site from the parent directory
@@ -215,11 +217,12 @@ CREATE INDEX IF NOT EXISTS idx_payment_receipts_status_auto_approve
 `);
 
 const PLANS = {
-  'Başlanğıc': { price: 13, daily: 1 },
-  'Standart':  { price: 30, daily: 2 },
-  'Biznes':    { price: 67, daily: 4 },
-  'Premium':   { price: 96, daily: 6 },
-  'Elit':      { price: 200, daily: 14 }
+  'Başlanğıc Otaq': { price: 13, daily: 1 },
+  'Standart Otaq':  { price: 30, daily: 2 },
+  'Biznes Otaq':    { price: 67, daily: 4 },
+  'Premium Otaq':   { price: 96, daily: 6 },
+  'Elit Otaq':      { price: 200, daily: 14 },
+  'Elit Plus Otaq': { price: 460, daily: 40 }
 };
 
 Object.keys(PLANS).forEach(function (name) {
@@ -375,10 +378,10 @@ function totalWithdrawn(userId) {
 
 // ---------- AUTH ----------
 app.post('/api/register', (req, res) => {
-  var { fullname, email, password, finCode, phone } = req.body || {};
+  var { fullname, email, password, phone } = req.body || {};
   if (typeof fullname !== 'string' || typeof email !== 'string' || typeof password !== 'string' ||
-      typeof finCode !== 'string' || typeof phone !== 'string' ||
-      !fullname.trim() || !email.trim() || !password || !finCode.trim() || !phone.trim()) {
+      typeof phone !== 'string' ||
+      !fullname.trim() || !email.trim() || !password || !phone.trim()) {
     return res.status(400).json({ error: 'Bütün sahələr tələb olunur.' });
   }
   if (fullname.trim().length > 120 || email.trim().length > 254 || password.length > 128) {
@@ -388,8 +391,8 @@ app.post('/api/register', (req, res) => {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return res.status(400).json({ error: 'E-poçt formatı yanlışdır.' });
   phone = normalizePhone(phone);
   if (!/^\+994\s\d{2}\s\d{3}\s\d{2}\s\d{2}$/.test(phone)) return res.status(400).json({ error: 'Mobil nömrə formatı +994 xx xxx xx xx olmalıdır.' });
-  finCode = String(finCode).trim().toUpperCase();
-  if (!/^[A-Z0-9]{7}$/.test(finCode)) return res.status(400).json({ error: 'FIN kodu 7 hərf və ya rəqəmdən ibarət olmalıdır.' });
+  var finCode = typeof (req.body || {}).finCode === 'string' ? req.body.finCode.trim().toUpperCase() : '';
+  if (finCode && !/^[A-Z0-9]{7}$/.test(finCode)) finCode = '';
   try {
     var info = db.prepare('INSERT INTO users (fullname, email, phone, password_hash, fin_code) VALUES (?,?,?,?,?)')
       .run(fullname.trim(), email.trim().toLowerCase(), phone, hashPassword(password), finCode);
@@ -411,6 +414,66 @@ app.post('/api/register', (req, res) => {
     if (String(e.message).includes('users.fin_code')) return res.status(409).json({ error: 'Bu FIN kodu artıq qeydiyyatdan keçib.' });
     res.status(500).json({ error: 'Qeydiyyat alınmadı.' });
   }
+});
+
+// ---------- PASSWORD RESET ----------
+const passwordResetCodes = new Map(); // email -> { code, expiresAt }
+const RESET_CODE_TTL = 15 * 60 * 1000;
+
+app.post('/api/forgot-password', createRateLimiter(15 * 60 * 1000, 5, 'reset'), (req, res) => {
+  var { email } = req.body || {};
+  if (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+    return res.status(400).json({ error: 'Düzgün e-poçt ünvanı daxil edin.' });
+  }
+  var normalized = email.trim().toLowerCase();
+  var user = db.prepare('SELECT id, fullname FROM users WHERE email = ?').get(normalized);
+  // Cavabda istifadəçinin olub-olmadığını açıqlamırıq (security).
+  if (user && isMailConfigured()) {
+    var code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+    passwordResetCodes.set(normalized, { code, expiresAt: Date.now() + RESET_CODE_TTL });
+    sendResetCodeEmail(normalized, code).then(function (sent) {
+      if (!sent) console.warn('[reset] Kod e-poçtu göndərilmədi:', normalized);
+    });
+  } else if (user && !isMailConfigured()) {
+    console.warn('[reset] Mail konfiqurasiya edilməyib — kod göndərilmədi:', normalized);
+  }
+  res.json({ ok: true, message: 'Əgər bu e-poçt qeydiyyatdan keçibsə, bərpa kodu göndərildi.' });
+});
+
+app.post('/api/verify-reset-code', createRateLimiter(15 * 60 * 1000, 10, 'reset-verify'), (req, res) => {
+  var { email, code } = req.body || {};
+  if (typeof email !== 'string' || typeof code !== 'string') {
+    return res.status(400).json({ error: 'E-poçt və kod tələb olunur.' });
+  }
+  var normalized = email.trim().toLowerCase();
+  var entry = passwordResetCodes.get(normalized);
+  if (!entry || entry.expiresAt <= Date.now() || entry.code !== code.trim()) {
+    return res.status(400).json({ error: 'Kod yanlışdır və ya vaxtı keçib.' });
+  }
+  res.json({ ok: true });
+});
+
+app.post('/api/reset-password', createRateLimiter(15 * 60 * 1000, 10, 'reset-confirm'), (req, res) => {
+  var { email, code, newPassword } = req.body || {};
+  if (typeof email !== 'string' || typeof code !== 'string' || typeof newPassword !== 'string' ||
+      !email.trim() || !code.trim() || !newPassword) {
+    return res.status(400).json({ error: 'E-poçt, kod və yeni şifrə tələb olunur.' });
+  }
+  if (newPassword.length < 12 || newPassword.length > 128) {
+    return res.status(400).json({ error: 'Şifrə minimum 12 simvol olmalıdır.' });
+  }
+  var normalized = email.trim().toLowerCase();
+  var entry = passwordResetCodes.get(normalized);
+  if (!entry || entry.expiresAt <= Date.now() || entry.code !== code.trim()) {
+    return res.status(400).json({ error: 'Kod yanlışdır və ya vaxtı keçib.' });
+  }
+  var user = db.prepare('SELECT id FROM users WHERE email = ?').get(normalized);
+  if (!user) return res.status(400).json({ error: 'İstifadəçi tapılmadı.' });
+  db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(newPassword), user.id);
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(user.id);
+  passwordResetCodes.delete(normalized);
+  sendTelegramMessage('🔒 <b>ŞİFRƏ BƏRPASI</b>\n\n👤 İstifadəçi: <b>' + escapeTelegramHtml(normalized) + '</b>\n🕒 ' + new Date().toLocaleString('az-AZ'));
+  res.json({ ok: true, message: 'Şifrə yeniləndi. Yeni şifrə ilə daxil ola bilərsiniz.' });
 });
 
 app.post('/api/login', (req, res) => {
@@ -480,7 +543,7 @@ app.get('/api/me', (req, res) => {
 app.post('/api/purchase', (req, res) => {
   var user = authUser(req);
   if (!user) return res.status(401).json({ error: 'Avtorizasiya tələb olunur.' });
-  res.status(409).json({ error: 'Paket yalnız ödəniş qəbzi göndərilib təsdiqləndikdən sonra aktivləşdirilir.' });
+  res.status(409).json({ error: 'Otaq yalnız ödəniş qəbzi göndərilib təsdiqləndikdən sonra aktivləşdirilir.' });
 });
 
 app.post('/api/payment/receipt', async (req, res) => {
@@ -498,7 +561,7 @@ app.post('/api/payment/receipt', async (req, res) => {
   var promoRate = promoCode ? promoRates[promoCode] : 0;
   var expectedAmount = plan ? Math.round(plan.price * (1 - (promoRate || 0)) * 100) / 100 : 0;
   if (!plan || (promoCode && promoRate === undefined) || !Number.isFinite(amount) || amount !== expectedAmount) {
-    return res.status(400).json({ error: 'Paket və ya ödəniş məbləği yanlışdır.' });
+    return res.status(400).json({ error: 'Otaq və ya ödəniş məbləği yanlışdır.' });
   }
 
   var imageMatch = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(body.imageData || ''));
@@ -524,7 +587,7 @@ app.post('/api/payment/receipt', async (req, res) => {
     (testMode ? 'TEST QƏBZİ · ' : 'Ödəniş qəbzi · ') + requestId,
     'İstifadəçi: ' + escapeTelegramHtml(user.fullname),
     'E-poçt: ' + escapeTelegramHtml(user.email),
-    'Paket: ' + body.plan,
+    'Otaq: ' + body.plan,
     'Məbləğ: ' + amount.toFixed(2) + ' AZN',
     testMode ? 'Test rejimi: 60 saniyəyə avtomatik təsdiqlənəcək' : 'Status: təsdiq gözləyir',
     'Aşağıdakı düymələrdən istifadə edin; əmrlə də təsdiqləyə bilərsiniz.'
@@ -681,7 +744,7 @@ function handlePaymentCommand(action, requestId, chatId, userId, isInternal) {
 
   var plan = PLANS[receipt.plan_name];
   if (action === 'approve' && !plan) {
-    sendTelegramMessage('Paket məlumatı tapılmadı; təsdiq edilmədi.', chatId);
+    sendTelegramMessage('Otaq məlumatı tapılmadı; təsdiq edilmədi.', chatId);
     return;
   }
 
@@ -704,8 +767,8 @@ function handlePaymentCommand(action, requestId, chatId, userId, isInternal) {
   }
 
   var message = action === 'approve'
-    ? 'Təsdiqləndi: ' + requestId + '\nPaket: ' + receipt.plan_name + '\nGündəlik gəlir: ' + plan.daily.toFixed(2) + ' AZN. İlk gündəlik məbləğ balansa köçürüldü.'
-    : 'Rədd edildi: ' + requestId + '. Paket aktivləşdirilmədi.';
+    ? 'Təsdiqləndi: ' + requestId + '\nOtaq: ' + receipt.plan_name + '\nGündəlik gəlir: ' + plan.daily.toFixed(2) + ' AZN. İlk gündəlik məbləğ balansa köçürüldü.'
+    : 'Rədd edildi: ' + requestId + '. Otaq aktivləşdirilmədi.';
   sendTelegramMessage(message, chatId);
 }
 

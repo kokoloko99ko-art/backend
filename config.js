@@ -14,7 +14,9 @@ for (const key of [
   'TELEGRAM_ADMIN_USER_ID',
   'TELEGRAM_BOT_USERNAME',
   'PAYMENT_CARD_NUMBER',
-  'PAYMENT_BANK_NAME'
+  'PAYMENT_BANK_NAME',
+  'GMAIL_USER',
+  'GMAIL_APP_PASSWORD'
 ]) {
   if (process.env[key]) config[key] = process.env[key];
 }
